@@ -1,0 +1,307 @@
+<?xml version="1.0" encoding="utf-8"?><!DOCTYPE nta PUBLIC '-//Uppaal Team//DTD Flat System 1.1//EN' 'http://www.it.uu.se/research/group/darts/uppaal/flat-1_1.dtd'><nta><declaration>const int MAXGM = 1;
+const int MAXLEN = 11;
+const int MAX = 30;
+typedef int[-1,4] TYPE;
+typedef int[1,1] GMDID;
+typedef int[0,3] PublisherID; //0,1: GM, 2:client, 3: App
+typedef int[-1,1] TargetID; //1-3: gummy modules
+
+typedef struct {
+  TYPE type;
+  TargetID target;
+  PublisherID publisher;
+  int timestamp;
+} BaseEventType;
+
+chan start, terminate;
+chan produce, consume, ready;
+chan process_app[GMDID], process_app_return[GMDID], process_disapp[GMDID], process_disapp_return[GMDID], process_util[GMDID], process_util_return[GMDID], produceFromGM[GMDID], proceed[GMDID];
+chan instantiate_coordinator[GMDID],instantiate_coordinator_return[GMDID], introduce[GMDID],introduce_return[GMDID];
+
+broadcast chan processing_finished[PublisherID];
+chan gm_process[GMDID], gm_process_return[GMDID];
+BaseEventType input[GMDID], p_event;
+GMDID gm;
+BaseEventType eventqueue[MAXLEN];
+BaseEventType local_eventqueue[GMDID][MAXLEN];
+int[0,MAXLEN] len;
+int[0,MAXLEN] locallen[GMDID];
+
+chan statement_call[GMDID], statement_call_return[GMDID];
+int[0,1] constructing[GMDID], destructing[GMDID],constructed[GMDID], destructed[GMDID];
+int statement[GMDID];
+int counter[GMDID];
+const int APPEARANCE = 0, DISAPPEARANCE = 1, UTILIZATION = 2;
+int block[GMDID];
+
+
+//--------------------
+//int type;
+//int appeared;
+//int disappeared;
+//chan event_call;
+//chan event_call_return;
+//chan event_cflow;
+//chan event_cflow_return;
+
+//chan statement_call, statement_call_return;
+chan event_cflow, event_cflow_return;
+//int event;
+//TYPE current_event;
+//int statement;
+const int CONSTRUCT = 1;
+const int DESTRUCT = 2;
+const int ACCESS = 3;
+//int[0,1] constructing, destructing;
+//int [0,1] appearance_active, disappearance_active, utilization_active;
+chan new_event[TYPE], receive_event, request_event, next_event, provide_event;
+//typedef int [0,0] DISAPP_TYPE;
+//typedef int [1,1] UTILIZATION_TYPE;
+//DISAPP_TYPE DISAPPEARANCE;
+//UTILIZATION_TYPE UTILIZATION;
+chan event_cflow_dis, event_cflow_dis_return,  event_cflow_util, event_cflow_util_return,event_cflow_app, event_cflow_app_return;
+int number_interfaces;
+int current_interface;
+
+
+
+//-------------------- rules ------------
+//events 2..9: appearance
+//events 3..7: disappearance
+//events 5..9: utilization
+
+//- define range of acceptable events for each interface
+//- if there is an event, it will eventually be processed by one of the interfaces
+//- if there is an event matches for both DIS and UTIL, it will be processed by at least one of these
+//- if e is processed by DISP and does not lead destruction, it will be processed by UTIL
+// if e only matches UTIL, it will not be processed by DIS, it wont lead to destruction
+
+//--------------------------------------
+
+bool matches(BaseEventType event){
+ if (event.type &gt;= 0 &amp;&amp; event.type &lt;=4)
+	return true;
+ else
+	return false;
+}
+
+//--------------------------------------
+//define produce_event as a template
+// type: 3 Construct; 7: Destruct
+// Appearance: 0..5, 3 is Construct
+// Disappearance: 6..10, 7 is Destruct
+//Utilization 6..10
+
+//1- whenever an event of the type 0 ..10 comes, it will be processed by one interface at least
+//2- when App.I is processing the event E, the other interfaces cannot process E or any causally-dependent events of E.
+
+//Questions to query: 8 cases for activation!
+// 1- is there any case where Appearance, Disappearance and Utilization are active at the same time? 
+// 2- is there any case where Utilization and Disappearance are active at the same time? i.e. there is circular causal event dependency
+// 3- is there any case where none of these interfaces are active? 
+// 4- when E comes and matches an interface, providing that there is no violation of invariants, E will be processed by the interface
+//5- when App.I is processing the event E, the other interfaces cannot process E or any causally-dependent events of E.
+//6- when Dis.I or U.I is processing the event E, the other interfaces cannot process any causally-dependent events of E.
+//7- After E and all of its causally dependent events are processed by Disp.I, if the module is still active, E can be processed by U.I
+//8- After E and all of its causally dependent events are processed by Disp.I, if the module is not  active, E can be processed by App.I
+//9- After E and all of its causally dependent events are processed by App.I, if the module is active, E can be processed by Dis.I or U.I
+//10- if a module is appeared, E must first be processed by Disp.I
+
+//accepted cases: (1,0,0), (0,1[E],1[NE]), (0,1[NE],1[E])
+//accepted cases: an event generated directly or causally by an interface, can be processed by that interface
+
+//event is a shared resource that can be processed by only one interface at a given time. 
+   //This also means for its causally-related generated events!
+//it takes some time to process an event, and finish processing it
+//processing an event leads to new events, that are causally dependt
+//when an interface starts processing an event, it sets its identity into CUR, to tell runtime environment.</declaration><template><name>GummyCoordinator</name><parameter>GMDID gm_id</parameter><declaration>
+
+void initialize(GMDID gm)
+{
+	locallen[gm] = 0;
+	block[gm] = APPEARANCE;
+	counter[gm] = 1;
+}
+
+int codeBlocksNum(){
+if (constructed[gm_id] == 1)
+	return  2;
+else
+	return  1;
+}
+int codeBlockType(){
+if (constructed[gm_id] == 0)
+	return APPEARANCE;
+else
+	return DISAPPEARANCE;
+}
+void updateBlock()
+{
+
+if (constructed[gm_id] == 1)
+	{block[gm_id] = DISAPPEARANCE; counter[gm_id] = 2;}
+else
+	{block[gm_id] = APPEARANCE; counter[gm_id]  = 1;}
+}
+bool NULL(BaseEventType event){
+ return event.type == -1;
+}
+
+bool Unknown(int target){
+ return target == -1;
+}
+
+const int MAXSIZE = 2;
+typedef struct 
+{
+	BaseEventType ev[MAXSIZE];
+	int idx[MAXSIZE];
+	GMDID gm[MAXSIZE];
+	int[-1,1] top;
+}stacktype;
+
+BaseEventType NullEvent(){
+	BaseEventType e;
+	e.type = -1;
+	return e;
+}
+
+BaseEventType local_dequeue(GMDID gm)
+{
+	if (locallen[gm] == 0)
+	   return NullEvent();
+	else{	
+	BaseEventType e; 
+	int i = 0;
+        locallen[gm] -= 1;
+	e = local_eventqueue[gm][i];
+        while (i &lt; locallen[gm])
+        {
+                local_eventqueue[gm][i] = local_eventqueue[gm][i + 1];
+                i++;
+        }
+        local_eventqueue[gm][i] = NullEvent();
+	return e;
+	}
+}
+void finish_constructing(){
+	if (constructing[gm_id] == 1){
+	constructed[gm_id] = 1;
+	destructed[gm_id] = 0;
+	constructing[gm_id] = 0;
+	block[gm_id] = DISAPPEARANCE;
+	counter[gm_id] = 2;
+	}
+}
+void finish_destructing(){
+	if (destructing[gm_id] == 1){
+		constructed[gm_id] = 0;
+		destructed[gm_id] = 1;
+		destructing[gm_id] = 0;
+		block[gm_id] = APPEARANCE;
+		counter[gm_id] = 1;
+	}
+}
+
+</declaration><location id="id0" x="-1568" y="-632"><urgent/></location><location id="id1" x="-656" y="-264"><name x="-728" y="-280">Start_Util</name><urgent/></location><location id="id2" x="-656" y="-368"><name x="-640" y="-376">Select_Util</name><urgent/></location><location id="id3" x="-656" y="-192"><name x="-666" y="-222">End_Disapp</name><urgent/></location><location id="id4" x="-944" y="-280"><name x="-928" y="-296">Start_Disapp</name><urgent/></location><location id="id5" x="-944" y="-368"><name x="-1048" y="-376">Select_Disapp</name><urgent/></location><location id="id6" x="-1136" y="-280"><name x="-1120" y="-288">Start_App</name><urgent/></location><location id="id7" x="-1136" y="-368"><name x="-1224" y="-376">Select_App</name><urgent/></location><location id="id8" x="-944" y="-464"><name x="-928" y="-480">Select_Block</name><urgent/></location><location id="id9" x="-944" y="-552"><name x="-936" y="-584">Processing_Event</name><urgent/></location><location id="id10" x="-1104" y="-632"><urgent/></location><location id="id11" x="-1328" y="-632"><name x="-1408" y="-656">Get_Event</name><urgent/></location><location id="id12" x="-1568" y="-768"><name x="-1578" y="-798">Start</name></location><location id="id13" x="-1016" y="208"><name x="-1032" y="224">Error</name></location><location id="id14" x="-760" y="-112"><name x="-744" y="-112">Destructing</name><urgent/></location><location id="id15" x="-1312" y="-112"><name x="-1400" y="-104">Constructing</name><urgent/></location><location id="id16" x="-1016" y="-112"><name x="-1026" y="-142">Special_Cmd</name><urgent/></location><init ref="id12"/><transition><source ref="id0"/><target ref="id11"/><label kind="synchronisation" x="-1568" y="-624">instantiate_coordinator_return[gm_id]!</label><nail x="-1504" y="-632"/></transition><transition><source ref="id9"/><target ref="id11"/><label kind="guard" x="-1160" y="-576">counter[gm_id]&lt;=0</label><label kind="assignment" x="-1152" y="-552">updateBlock()</label><nail x="-1328" y="-552"/></transition><transition><source ref="id1"/><target ref="id9"/><label kind="synchronisation" x="-672" y="-504">process_util_return[gm_id]?</label><nail x="-496" y="-264"/><nail x="-496" y="-552"/></transition><transition><source ref="id2"/><target ref="id1"/><label kind="synchronisation" x="-648" y="-336">process_util[gm_id]!</label><label kind="assignment" x="-648" y="-304">counter[gm_id]--</label></transition><transition><source ref="id8"/><target ref="id2"/><label kind="guard" x="-824" y="-440">block[gm_id] == UTILIZATION</label></transition><transition><source ref="id3"/><target ref="id11"/><label kind="guard" x="-560" y="-128">destructing[gm_id] == 1</label><label kind="assignment" x="-560" y="-112">finish_destructing()</label><nail x="-656" y="-128"/><nail x="-368" y="-128"/><nail x="-368" y="-696"/><nail x="-1328" y="-696"/></transition><transition><source ref="id3"/><target ref="id9"/><label kind="guard" x="-600" y="-192">destructing[gm_id] != 1</label><label kind="assignment" x="-608" y="-176">block[gm_id]=UTILIZATION</label><nail x="-416" y="-192"/><nail x="-416" y="-552"/></transition><transition><source ref="id4"/><target ref="id3"/><label kind="synchronisation" x="-856" y="-248">process_disapp_return[gm_id]?</label></transition><transition><source ref="id4"/><target ref="id16"/><label kind="synchronisation" x="-1024" y="-184">statement_call[gm_id]?</label></transition><transition><source ref="id5"/><target ref="id4"/><label kind="synchronisation" x="-936" y="-352">process_disapp[gm_id]!</label><label kind="assignment" x="-936" y="-336">counter[gm_id]--</label></transition><transition><source ref="id8"/><target ref="id5"/><label kind="guard" x="-1024" y="-408">block[gm_id] == DISAPPEARANCE</label></transition><transition><source ref="id6"/><target ref="id11"/><label kind="synchronisation" x="-1512" y="-432">process_app_return[gm_id]?</label><label kind="assignment" x="-1512" y="-416">finish_constructing()</label><nail x="-1328" y="-280"/></transition><transition><source ref="id6"/><target ref="id16"/><label kind="synchronisation" x="-1136" y="-216">statement_call[gm_id]?</label></transition><transition><source ref="id7"/><target ref="id6"/><label kind="synchronisation" x="-1272" y="-344">process_app[gm_id]!</label></transition><transition><source ref="id8"/><target ref="id7"/><label kind="guard" x="-1224" y="-440">block[gm_id] == APPEARANCE</label></transition><transition><source ref="id9"/><target ref="id8"/><label kind="guard" x="-1056" y="-520">counter[gm_id]&gt;0</label></transition><transition><source ref="id10"/><target ref="id9"/><label kind="guard" x="-936" y="-648">!NULL(input[gm_id])</label><label kind="assignment" x="-936" y="-632">counter[gm_id] = codeBlocksNum(),
+block[gm_id] = codeBlockType()</label><nail x="-944" y="-632"/></transition><transition><source ref="id10"/><target ref="id11"/><label kind="guard" x="-1216" y="-688">NULL(input[gm_id])</label><nail x="-1104" y="-664"/><nail x="-1320" y="-664"/></transition><transition><source ref="id11"/><target ref="id10"/><label kind="assignment" x="-1312" y="-624">input[gm_id] = local_dequeue(gm_id)</label></transition><transition><source ref="id12"/><target ref="id0"/><label kind="synchronisation" x="-1560" y="-736">instantiate_coordinator[gm_id]?</label><label kind="assignment" x="-1560" y="-720">initialize(gm_id)</label><nail x="-1568" y="-672"/><nail x="-1568" y="-648"/></transition><transition><source ref="id16"/><target ref="id13"/><label kind="guard" x="-1008" y="112">(statement[gm_id] == CONSTRUCT &amp;&amp;
+destructing[gm_id] == 1) || 
+(statement[gm_id] == DESTRUCT &amp;&amp;
+constructing[gm_id] == 1)||
+(statement[gm_id] == ACCESS &amp;&amp; (constructing[gm_id] == 0 || constructed[gm_id] != 1))</label></transition><transition><source ref="id16"/><target ref="id14"/><label kind="guard" x="-968" y="16">statement[gm_id] == DESTRUCT &amp;&amp;
+destructing[gm_id] == 1 &amp;&amp;
+block[gm_id] == DISAPPEARANCE</label><nail x="-992" y="8"/><nail x="-848" y="8"/><nail x="-760" y="8"/></transition><transition><source ref="id14"/><target ref="id4"/><label kind="synchronisation" x="-888" y="-160">statement_call_return[gm_id]!</label></transition><transition><source ref="id16"/><target ref="id14"/><label kind="guard" x="-992" y="-104">statement[gm_id] == DESTRUCT &amp;&amp;
+destructing[gm_id] == 0 &amp;&amp;
+block[gm_id] == DISAPPEARANCE</label><label kind="assignment" x="-984" y="-56">destructing[gm_id] = 1</label><nail x="-880" y="-112"/></transition><transition><source ref="id16"/><target ref="id15"/><label kind="guard" x="-1328" y="16">statement[gm_id] == CONSTRUCT &amp;&amp;
+constructing[gm_id] == 1 &amp;&amp;
+block[gm_id] == APPEARANCE</label><nail x="-1080" y="8"/><nail x="-1264" y="8"/><nail x="-1304" y="8"/><nail x="-1312" y="8"/><nail x="-1312" y="-8"/></transition><transition><source ref="id15"/><target ref="id6"/><label kind="synchronisation" x="-1360" y="-216">statement_call_return[gm_id]!</label></transition><transition><source ref="id16"/><target ref="id15"/><label kind="guard" x="-1288" y="-112">statement[gm_id] == CONSTRUCT &amp;&amp;
+constructing[gm_id] == 0 &amp;&amp;
+block[gm_id] == APPEARANCE</label><label kind="assignment" x="-1288" y="-64">constructing[gm_id] = 1</label></transition></template><template><name>GummyModuleUtilization</name><parameter>GMDID gm_id</parameter><declaration>clock c;
+
+int[2,2] util_event_expression (){
+return 2;
+}
+
+BaseEventType produceEvent(){
+	BaseEventType e;
+	e.type = 3;
+	e.publisher = gm_id;
+	e.target = 1;
+	return e;
+}
+
+bool produceEv(){
+ return gm_id == 0;
+}</declaration><location id="id17" x="-352" y="-288"><urgent/></location><location id="id18" x="-328" y="-464"><urgent/></location><location id="id19" x="-168" y="-288"><name x="-152" y="-288">Processing</name><label kind="invariant" x="-80" y="-280">c &lt;= MAX</label></location><location id="id20" x="-168" y="-464"><name x="-178" y="-494">Start</name></location><init ref="id20"/><transition><source ref="id19"/><target ref="id17"/><label kind="assignment" x="-344" y="-320">p_event = produceEvent()</label></transition><transition><source ref="id17"/><target ref="id19"/><label kind="synchronisation" x="-288" y="-240">produce!</label><label kind="assignment" x="-280" y="-224">c = 0</label><nail x="-256" y="-240"/></transition><transition><source ref="id18"/><target ref="id20"/><label kind="synchronisation" x="-344" y="-440">process_util_return[gm_id]!</label><nail x="-248" y="-440"/></transition><transition><source ref="id20"/><target ref="id18"/><label kind="guard" x="-296" y="-512">!matches(input[gm_id])</label><label kind="synchronisation" x="-304" y="-528">process_util[gm_id]?</label><nail x="-248" y="-488"/></transition><transition><source ref="id19"/><target ref="id20"/><label kind="synchronisation" x="-96" y="-488">process_util_return[gm_id]!</label><nail x="80" y="-288"/><nail x="88" y="-288"/><nail x="88" y="-288"/><nail x="88" y="-464"/></transition><transition><source ref="id20"/><target ref="id19"/><label kind="guard" x="-160" y="-416">matches(input[gm_id])</label><label kind="synchronisation" x="-160" y="-400">process_util[gm_id]?</label><label kind="assignment" x="-160" y="-384">c = 0</label></transition></template><template><name>putqueue</name><declaration>void enqueue(BaseEventType element)
+{
+	/*if (len &lt; MAXLEN) {
+	        eventqueue[len] = element;
+		len++;
+	}*/
+	/*if (locallen[0] &lt; MAXLEN) {
+	        localeventqueue[0][len] = element;
+		locallen[0]++;
+	}*/
+	if (locallen[1] &lt; MAXLEN) {
+	        local_eventqueue[1][len] = element;
+		locallen[1]++;
+	}
+}
+void dispatchenqueue(BaseEventType element)
+{
+/*	if (locallen[0] &lt; MAXLEN) {
+	        localeventqueue[0][len] = element;
+		locallen[0]++;
+	}*/
+	if (locallen[1] &lt; MAXLEN) {
+	        local_eventqueue[1][len] = element;
+		locallen[1]++;
+	}
+}
+</declaration><location id="id21" x="-616" y="-272"><urgent/></location><location id="id22" x="-832" y="-272"></location><init ref="id22"/><transition><source ref="id21"/><target ref="id22"/><label kind="assignment" x="-776" y="-344">enqueue(p_event)</label><nail x="-616" y="-320"/><nail x="-832" y="-320"/></transition><transition><source ref="id22"/><target ref="id21"/><label kind="synchronisation" x="-752" y="-296">produce?</label></transition></template><template><name>Client</name><declaration>clock c;
+int cnt = 0;
+
+BaseEventType produceEvent(){
+
+BaseEventType e;
+e.type = 1;
+e.publisher = 2;
+e.target = 0;
+return e;
+}</declaration><location id="id23" x="-384" y="-328"></location><location id="id24" x="-464" y="-328"></location><location id="id25" x="-592" y="-328"></location><location id="id26" x="-712" y="-328"></location><location id="id27" x="-880" y="-328"><urgent/></location><location id="id28" x="-1024" y="-328"></location><init ref="id28"/><transition><source ref="id23"/><target ref="id23"/><nail x="-336" y="-336"/><nail x="-352" y="-296"/></transition><transition><source ref="id24"/><target ref="id23"/><label kind="guard" x="-448" y="-352">cnt &gt;= 5</label></transition><transition><source ref="id24"/><target ref="id26"/><label kind="guard" x="-616" y="-440">cnt&lt;5</label><nail x="-592" y="-416"/></transition><transition><source ref="id25"/><target ref="id24"/><label kind="synchronisation" x="-560" y="-352">produce!</label><label kind="assignment" x="-560" y="-328">cnt++</label><nail x="-536" y="-328"/></transition><transition><source ref="id26"/><target ref="id25"/><label kind="assignment" x="-712" y="-312">p_event = produceEvent()</label></transition><transition><source ref="id27"/><target ref="id26"/><label kind="synchronisation" x="-864" y="-352">introduce_return[gm]?</label><label kind="assignment" x="-840" y="-328">cnt = 0</label></transition><transition><source ref="id28"/><target ref="id27"/><label kind="synchronisation" x="-1000" y="-352">introduce[gm]!</label><label kind="assignment" x="-976" y="-328">gm = 1</label></transition></template><template><name>GummyModuleAppearance</name><parameter>GMDID gm_id</parameter><declaration>clock c;
+int initialized = 0;
+int[1,2] i ;
+int[1,1] app_event_expression(){
+ return 1;
+}
+
+BaseEventType produceEvent(){
+	BaseEventType e;
+	e.type = 3;
+	e.publisher = gm_id;
+	e.target = 1;
+	return e;
+}
+
+bool produceEv(){
+ return gm_id ==0;
+}</declaration><location id="id29" x="-1856" y="-256"><urgent/></location><location id="id30" x="-1104" y="40"><urgent/></location><location id="id31" x="-1520" y="-48"><urgent/></location><location id="id32" x="-1720" y="-336"><urgent/></location><location id="id33" x="-1440" y="-336"><name x="-1424" y="-336">Initializing</name><urgent/></location><location id="id34" x="-1520" y="-408"><urgent/></location><location id="id35" x="-1896" y="-336"><urgent/></location><location id="id36" x="-1752" y="-520"><urgent/></location><location id="id37" x="-1520" y="-144"><urgent/></location><location id="id38" x="-1008" y="-48"><name x="-1032" y="-32">Returning</name><urgent/></location><location id="id39" x="-1520" y="-256"><name x="-1512" y="-248">Processing</name><label kind="invariant" x="-1480" y="-232">c &lt;= MAX</label></location><location id="id40" x="-1328" y="-48"><name x="-1384" y="-32">Request_Construction</name><urgent/></location><location id="id41" x="-1104" y="-48"><name x="-1176" y="-40">Further_Processing</name><label kind="invariant" x="-1120" y="-24">c &lt;= MAX</label></location><location id="id42" x="-1520" y="-520"><name x="-1536" y="-552">Start</name></location><init ref="id42"/><transition><source ref="id29"/><target ref="id39"/><label kind="synchronisation" x="-1744" y="-200">produce!</label><label kind="assignment" x="-1736" y="-184">c = 0</label><nail x="-1712" y="-200"/></transition><transition><source ref="id39"/><target ref="id29"/><label kind="assignment" x="-1784" y="-256">p_event = produceEvent()</label></transition><transition><source ref="id30"/><target ref="id41"/><label kind="synchronisation" x="-1064" y="16">produce!</label><label kind="assignment" x="-1064" y="32">c = 0</label><nail x="-1088" y="32"/><nail x="-1040" y="16"/></transition><transition><source ref="id41"/><target ref="id30"/><label kind="assignment" x="-1320" y="0">p_event = produceEvent()</label><nail x="-1160" y="16"/></transition><transition><source ref="id39"/><target ref="id32"/><label kind="assignment" x="-1712" y="-328">statement[gm_id] = ACCESS</label><nail x="-1560" y="-336"/></transition><transition><source ref="id31"/><target ref="id40"/><label kind="synchronisation" x="-1496" y="-72">statement_call[gm_id]!</label></transition><transition><source ref="id37"/><target ref="id31"/><label kind="assignment" x="-1520" y="-112">statement[gm_id] = CONSTRUCT</label></transition><transition><source ref="id32"/><target ref="id35"/><label kind="synchronisation" x="-1872" y="-360">statement_call[gm_id]!</label></transition><transition><source ref="id34"/><target ref="id39"/><label kind="guard" x="-1608" y="-392">initialized != 0</label></transition><transition><source ref="id33"/><target ref="id39"/><label kind="assignment" x="-1480" y="-304">initialized = 1</label></transition><transition><source ref="id34"/><target ref="id33"/><label kind="guard" x="-1472" y="-384">initialized == 0</label></transition><transition><source ref="id35"/><target ref="id39"/><label kind="synchronisation" x="-1912" y="-304">statement_call_return[gm_id]?</label><nail x="-1544" y="-264"/></transition><transition><source ref="id36"/><target ref="id42"/><label kind="synchronisation" x="-1712" y="-496">process_app_return[gm_id]!</label><nail x="-1624" y="-496"/></transition><transition><source ref="id42"/><target ref="id36"/><label kind="guard" x="-1680" y="-592">!matches(input[gm_id])</label><label kind="synchronisation" x="-1696" y="-576">process_app[gm_id]?</label><nail x="-1536" y="-528"/><nail x="-1624" y="-552"/></transition><transition><source ref="id41"/><target ref="id38"/><nail x="-1064" y="-48"/></transition><transition><source ref="id39"/><target ref="id37"/></transition><transition><source ref="id38"/><target ref="id42"/><label kind="synchronisation" x="-1352" y="-544">process_app_return[gm_id]!</label><nail x="-984" y="-48"/><nail x="-984" y="-520"/><nail x="-1328" y="-520"/></transition><transition><source ref="id39"/><target ref="id38"/><nail x="-1008" y="-256"/><nail x="-1008" y="-96"/></transition><transition><source ref="id41"/><target ref="id37"/><nail x="-1104" y="-144"/><nail x="-1488" y="-144"/></transition><transition><source ref="id40"/><target ref="id41"/><label kind="synchronisation" x="-1312" y="-80">statement_call_return[gm_id]?</label><label kind="assignment" x="-1248" y="-64">c = 0</label></transition><transition><source ref="id42"/><target ref="id34"/><label kind="guard" x="-1512" y="-472">matches(input[gm_id])</label><label kind="synchronisation" x="-1512" y="-488">process_app[gm_id]?</label><label kind="assignment" x="-1512" y="-456">c = 0</label><nail x="-1520" y="-504"/></transition></template><template><name>GummyModuleDisappearance</name><parameter>GMDID gm_id</parameter><declaration>clock c;
+int[3,3] disapp_event_expression(){
+return 3;
+}
+
+BaseEventType produceEvent(){
+	BaseEventType e;
+	e.type = 3;
+	e.publisher = gm_id;
+	e.target = 1;
+	return e;
+}
+
+bool produceEv(){
+ return gm_id ==0;
+}</declaration><location id="id43" x="-1536" y="-104"><urgent/></location><location id="id44" x="-1800" y="-256"><urgent/></location><location id="id45" x="-1736" y="-440"><urgent/></location><location id="id46" x="-1520" y="-256"><name x="-1512" y="-288">Processing</name><label kind="invariant" x="-1440" y="-288">c &lt;= MAX</label></location><location id="id47" x="-1800" y="-184"><name x="-1872" y="-168">Request_Destruction</name><urgent/></location><location id="id48" x="-1520" y="-440"><name x="-1530" y="-470">Start</name></location><init ref="id48"/><transition><source ref="id43"/><target ref="id46"/><label kind="synchronisation" x="-1496" y="-144">produce!</label><label kind="assignment" x="-1496" y="-128">c = 0</label><nail x="-1496" y="-104"/></transition><transition><source ref="id46"/><target ref="id43"/><label kind="assignment" x="-1736" y="-120">p_event = produceEvent()</label><nail x="-1576" y="-104"/></transition><transition><source ref="id44"/><target ref="id47"/><label kind="synchronisation" x="-1944" y="-232">statement_call[gm_id]!</label></transition><transition><source ref="id46"/><target ref="id44"/><label kind="assignment" x="-1760" y="-280">statement[gm_id] = DESTRUCT</label><nail x="-1616" y="-256"/></transition><transition><source ref="id45"/><target ref="id48"/><label kind="synchronisation" x="-1728" y="-408">process_disapp_return[gm_id]!</label><nail x="-1616" y="-408"/></transition><transition><source ref="id48"/><target ref="id45"/><label kind="guard" x="-1656" y="-512">!matches(input[gm_id])</label><label kind="synchronisation" x="-1688" y="-496">process_disapp[gm_id]?</label><nail x="-1616" y="-472"/></transition><transition><source ref="id46"/><target ref="id48"/><label kind="synchronisation" x="-1472" y="-464">process_disapp_return[gm_id]!</label><nail x="-1280" y="-256"/><nail x="-1280" y="-440"/></transition><transition><source ref="id47"/><target ref="id46"/><label kind="synchronisation" x="-1768" y="-184">statement_call_return[gm_id]?</label><label kind="assignment" x="-1704" y="-168">c = 0</label><nail x="-1672" y="-184"/><nail x="-1632" y="-184"/><nail x="-1632" y="-184"/></transition><transition><source ref="id48"/><target ref="id46"/><label kind="guard" x="-1512" y="-384">matches(input[gm_id])</label><label kind="synchronisation" x="-1512" y="-400">process_disapp[gm_id]?</label><label kind="assignment" x="-1512" y="-368">c = 0</label><nail x="-1520" y="-400"/></transition></template><template><name>GummyRuntime</name><location id="id49" x="-48" y="8"><urgent/></location><location id="id50" x="160" y="-40"><urgent/></location><location id="id51" x="-48" y="-40"><urgent/></location><location id="id52" x="-224" y="-40"></location><init ref="id52"/><transition><source ref="id49"/><target ref="id52"/><label kind="synchronisation" x="-216" y="-8">introduce_return[gm]!</label></transition><transition><source ref="id50"/><target ref="id49"/><label kind="synchronisation" x="16" y="0">instantiate_coordinator_return[gm]?</label><nail x="-16" y="0"/></transition><transition><source ref="id51"/><target ref="id50"/><label kind="synchronisation" x="-24" y="-64">instantiate_coordinator[gm]!</label></transition><transition><source ref="id52"/><target ref="id51"/><label kind="synchronisation" x="-176" y="-64">introduce[gm]?</label></transition></template><system>// Place template instantiations here.
+// List one or more processes to be composed into a system.
+//system putqueue, getqueue, GummyModuleMain, EventProvider, GummyRuntime, GummyCoordinator, GummyModuleAppearance, GummyModuleDisappearance, GummyModuleUtilization;
+system putqueue, Client, GummyRuntime, GummyCoordinator, GummyModuleUtilization, GummyModuleAppearance, GummyModuleDisappearance;
+</system></nta>
