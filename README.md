@@ -1,0 +1,2 @@
+# gummyj
+The GummyJ language
